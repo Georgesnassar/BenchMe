@@ -1,3 +1,5 @@
+'use client'
+
 import dynamic from 'next/dynamic'
 
 // BenchMap depends on Leaflet which requires browser APIs — must be client-side only
