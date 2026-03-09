@@ -2,7 +2,7 @@
 
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import Link from 'next/link'
 import { supabase } from '@/app/lib/supabase'
@@ -71,41 +71,35 @@ function createBenchIcon(imageUrl: string): L.DivIcon {
   })
 }
 
-/** Creates a pulsing grey DivIcon used as a skeleton placeholder while loading. */
-function createSkeletonIcon(): L.DivIcon {
-  return L.divIcon({
-    className: '',
-    html: `<div class="bench-skeleton" style="
-      width:52px;height:52px;border-radius:50%;background:#d1d5db;
-    "></div>`,
-    iconSize: [52, 52],
-    iconAnchor: [26, 26],
-  })
-}
-
-/** Fixed world-city positions used to display skeleton pins while data fetches. */
-const SKELETON_POSITIONS: [number, number][] = [
-  [51.505, -0.09],
-  [48.857, 2.352],
-  [40.712, -74.006],
-  [35.689, 139.692],
-  [-33.868, 151.209],
-  [55.751, 37.618],
-]
+const DEFAULT_CENTER: [number, number] = [40.7128, -74.006] // NYC fallback
+const STREET_ZOOM = 14
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-/**
- * Consumed inside MapContainer to auto-fit the viewport to all bench pins
- * once the data has loaded. Runs only when `benches` changes.
- */
-function BoundsAdjuster({ benches }: { benches: BenchPost[] }) {
+/** Creates the pulsing blue dot icon used to mark the user's location. */
+function createUserDotIcon(): L.DivIcon {
+  return L.divIcon({
+    className: '',
+    html: `<div class="user-location-dot" style="
+      width:18px;height:18px;border-radius:50%;
+      background:#007AFF;
+      border:3px solid #fff;
+      box-shadow:0 2px 8px rgba(0,122,255,0.5);
+    "></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  })
+}
+
+/** Renders a pulsing blue dot at the user's current location. */
+function UserDot({ position }: { position: [number, number] }) {
+  return <Marker position={position} icon={createUserDotIcon()} zIndexOffset={1000} />
+}
+
+/** Captures the Leaflet map instance into a ref so we can call imperative APIs. */
+function MapRefCapture({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }) {
   const map = useMap()
-  useEffect(() => {
-    if (benches.length === 0) return
-    const bounds = L.latLngBounds(benches.map(b => [b.latitude, b.longitude]))
-    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15 })
-  }, [benches, map])
+  useEffect(() => { mapRef.current = map }, [map, mapRef])
   return null
 }
 
@@ -166,14 +160,33 @@ function BenchMarker({
 
 /**
  * Full-screen interactive bench map.
- * Fetches all bench_posts from Supabase, resolves their storage image URLs,
- * then renders each as a circular photo pin on an OpenStreetMap base layer.
+ * Opens centered on the user's current location at street level (like Apple Maps).
+ * Fetches bench_posts from Supabase and renders each as a circular photo pin.
  */
 export default function BenchMap() {
   const [benches, setBenches] = useState<BenchPost[]>([])
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
+  const [locationReady, setLocationReady] = useState(false)
+  const mapRef = useRef<L.Map | null>(null)
+
+  // Get user's location before rendering the map
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationReady(true)
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        setUserLocation([pos.coords.latitude, pos.coords.longitude])
+        setLocationReady(true)
+      },
+      () => setLocationReady(true), // permission denied or unavailable — use fallback
+      { timeout: 6000, maximumAge: 60000 },
+    )
+  }, [])
 
   // Fetch bench posts from Supabase and resolve their public image URLs
   useEffect(() => {
@@ -207,13 +220,20 @@ export default function BenchMap() {
     load()
   }, [])
 
+  // Hold the grey screen until we know whether we have a location
+  if (!locationReady) {
+    return <div style={{ width: '100vw', height: '100vh', background: '#e5e7eb' }} />
+  }
+
+  const center = userLocation ?? DEFAULT_CENTER
+
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
 
-      {/* Full-screen map using OpenStreetMap tiles */}
+      {/* Full-screen map — starts at street level centered on user's location */}
       <MapContainer
-        center={[20, 0]}
-        zoom={2}
+        center={center}
+        zoom={STREET_ZOOM}
         style={{ width: '100%', height: '100%' }}
         scrollWheelZoom
       >
@@ -222,11 +242,10 @@ export default function BenchMap() {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
 
-        {/* Skeleton pins — pulsing placeholders shown while bench data loads */}
-        {loading &&
-          SKELETON_POSITIONS.map((pos, i) => (
-            <Marker key={`skeleton-${i}`} position={pos} icon={createSkeletonIcon()} />
-          ))}
+        <MapRefCapture mapRef={mapRef} />
+
+        {/* Pulsing blue dot — user's current location */}
+        {userLocation && <UserDot position={userLocation} />}
 
         {/* Real bench markers — rendered once Supabase data is ready */}
         {!loading &&
@@ -238,9 +257,6 @@ export default function BenchMap() {
               imageUrl={imageUrls[bench.id] ?? ''}
             />
           ))}
-
-        {/* Auto-fit map bounds to show all pins after data loads */}
-        {!loading && benches.length > 0 && <BoundsAdjuster benches={benches} />}
       </MapContainer>
 
       {/* Floating nav bar — pill-shaped, semi-transparent, top-right corner */}
@@ -323,6 +339,47 @@ export default function BenchMap() {
           </svg>
         </Link>
       </nav>
+
+      {/* Locate-me button — snaps back to user's location like Apple Maps */}
+      {userLocation && (
+        <button
+          onClick={() =>
+            mapRef.current?.flyTo(userLocation, STREET_ZOOM, { animate: true, duration: 0.8 })
+          }
+          aria-label="Go to my location"
+          style={{
+            position: 'absolute',
+            bottom: 32,
+            right: 16,
+            zIndex: 1000,
+            width: 44,
+            height: 44,
+            borderRadius: '50%',
+            background: 'rgba(255,255,255,0.92)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 2px 16px rgba(0,0,0,0.18)',
+          }}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#007AFF"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polygon points="3 11 22 2 13 21 11 13 3 11" />
+          </svg>
+        </button>
+      )}
 
       {/* Error toast — shown when the Supabase fetch fails */}
       {fetchError && (
