@@ -37,11 +37,11 @@ body {
 
 /* Pulsing blue dot — user's current location on the map */
 @keyframes user-dot-pulse {
-  0%   { box-shadow: 0 0 0 0   rgba(0, 122, 255, 0.45); }
-  70%  { box-shadow: 0 0 0 14px rgba(0, 122, 255, 0);   }
-  100% { box-shadow: 0 0 0 0   rgba(0, 122, 255, 0);    }
+  0%   { transform: scale(0.6); opacity: 0.8; }
+  70%  { transform: scale(1.4); opacity: 0;   }
+  100% { transform: scale(0.6); opacity: 0;   }
 }
 
 .user-location-dot {
-  animation: user-dot-pulse 2s ease-out infinite;
+  animation: user-dot-pulse 2.2s ease-out infinite;
 }

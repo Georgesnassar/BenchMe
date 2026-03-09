@@ -3,7 +3,7 @@
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useEffect, useRef, useState } from 'react'
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, useMap, CircleMarker } from 'react-leaflet'
 import Link from 'next/link'
 import { supabase } from '@/app/lib/supabase'
 
@@ -76,24 +76,34 @@ const STREET_ZOOM = 14
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-/** Creates the pulsing blue dot icon used to mark the user's location. */
-function createUserDotIcon(): L.DivIcon {
-  return L.divIcon({
-    className: '',
-    html: `<div class="user-location-dot" style="
-      width:18px;height:18px;border-radius:50%;
-      background:#007AFF;
-      border:3px solid #fff;
-      box-shadow:0 2px 8px rgba(0,122,255,0.5);
-    "></div>`,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9],
-  })
-}
-
-/** Renders a pulsing blue dot at the user's current location. */
+/**
+ * Renders the user's live location as a solid blue dot with a soft halo ring —
+ * identical to the Apple Maps / Google Maps style.
+ * Uses SVG CircleMarkers (no DivIcon clipping issues).
+ */
 function UserDot({ position }: { position: [number, number] }) {
-  return <Marker position={position} icon={createUserDotIcon()} zIndexOffset={1000} />
+  return (
+    <>
+      {/* Outer halo ring */}
+      <CircleMarker
+        center={position}
+        radius={18}
+        color="#007AFF"
+        fillColor="#007AFF"
+        fillOpacity={0.15}
+        weight={0}
+      />
+      {/* Inner solid dot with white border */}
+      <CircleMarker
+        center={position}
+        radius={9}
+        color="#ffffff"
+        fillColor="#007AFF"
+        fillOpacity={1}
+        weight={3}
+      />
+    </>
+  )
 }
 
 /** Captures the Leaflet map instance into a ref so we can call imperative APIs. */
@@ -170,22 +180,43 @@ export default function BenchMap() {
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
   const [locationReady, setLocationReady] = useState(false)
+  const [locationDenied, setLocationDenied] = useState(false)
   const mapRef = useRef<L.Map | null>(null)
 
-  // Get user's location before rendering the map
+  // Watch user's location in real-time (updates dot as they move)
   useEffect(() => {
     if (!navigator.geolocation) {
+      setLocationDenied(true)
       setLocationReady(true)
       return
     }
+
+    const options: PositionOptions = { enableHighAccuracy: true, maximumAge: 5000 }
+
+    // Get first fix quickly so we can open the map centered on the user
     navigator.geolocation.getCurrentPosition(
       pos => {
         setUserLocation([pos.coords.latitude, pos.coords.longitude])
         setLocationReady(true)
       },
-      () => setLocationReady(true), // permission denied or unavailable — use fallback
+      () => {
+        setLocationDenied(true)
+        setLocationReady(true)
+      },
       { timeout: 6000, maximumAge: 60000 },
     )
+
+    // Then keep tracking live — dot updates as they move
+    const watchId = navigator.geolocation.watchPosition(
+      pos => {
+        setUserLocation([pos.coords.latitude, pos.coords.longitude])
+        setLocationDenied(false)
+      },
+      () => {}, // silent — initial fix already handled
+      options,
+    )
+
+    return () => navigator.geolocation.clearWatch(watchId)
   }, [])
 
   // Fetch bench posts from Supabase and resolve their public image URLs
@@ -402,6 +433,38 @@ export default function BenchMap() {
           }}
         >
           {fetchError}
+        </div>
+      )}
+
+      {/* Location denied toast */}
+      {locationDenied && (
+        <div
+          role="alert"
+          style={{
+            position: 'absolute',
+            top: 80,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1000,
+            background: 'rgba(17,24,39,0.88)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+            color: '#fff',
+            padding: '10px 18px',
+            borderRadius: 12,
+            fontSize: 13,
+            fontWeight: 500,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            whiteSpace: 'nowrap',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+          </svg>
+          Location blocked — allow access in your browser to see your position
         </div>
       )}
 
